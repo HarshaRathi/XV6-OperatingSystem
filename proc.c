@@ -20,6 +20,41 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+//calculate cpu time
+int calculate_cpu_time(struct proc *p){
+	if(p->priority >= 0 && p->priority < 5){
+		return 200;
+	}
+	else if(p->priority >= 5 && p->priority < 10){
+		return 160;
+	}
+	else if(p->priority >= 10 && p->priority < 15){
+		return 120;
+	}
+	else if(p->priority >= 15 && p->priority < 20){
+		return 100;
+	}
+	else if(p->priority >= 20 && p->priority < 25){
+		return 60;
+	}
+	else if(p->priority >= 25 && p->priority < 30){
+		return 30;
+	}
+	return 0;
+}
+
+//set timer
+int settimer1(int pid, int timer){
+	struct proc *p;
+	for(p=ptable.proc ; p < &ptable.proc[NPROC] ; p++){
+		if(p->pid == pid){
+			p->timer = timer;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 void
 pinit(void)
 {
@@ -88,6 +123,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->priority = DEFAULTPRIORITY;
 
   release(&ptable.lock);
 
@@ -323,7 +359,10 @@ void
 scheduler(void)
 {
   struct proc *p;
+  struct proc *p1;
   struct cpu *c = mycpu();
+  struct proc *highpriority;
+  int t;
   c->proc = 0;
   
   for(;;){
@@ -335,6 +374,21 @@ scheduler(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+      
+      //select high priority process
+      highpriority = p;
+      for(p1 = ptable.proc; p1 < &ptable.proc[NPROC]; p1++){
+      	if(p1->state != RUNNABLE)
+      	   continue;
+      	if(p1->priority < highpriority->priority)
+      	   highpriority = p1;
+      }
+      
+      //assign high priority process
+      p = highpriority;
+      //assign cpu time
+      t = calculate_cpu_time(p);
+      settimer1(p->pid,t);
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -532,3 +586,26 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+int setpriority(int pid,int priority){
+	struct proc *p;
+	for(p=ptable.proc;p < &ptable.proc[NPROC];p++){
+		if(p->pid == pid){
+			p->priority = priority;
+			break;
+		}
+			
+	}
+	return 22;
+}
+int settimer(int pid,int timer){
+	struct proc *p;
+	for(p=ptable.proc;p < &ptable.proc[NPROC];p++){
+		if(p->pid == pid){
+			p->timer = timer;
+			break;
+		}
+	}
+	return 23;
+}
+
