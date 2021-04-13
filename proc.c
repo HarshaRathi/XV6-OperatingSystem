@@ -6,6 +6,46 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "pstat.h"
+
+#define PHI 0x9e3779b9
+//**Random function. 
+//**create a random number to pick the tickets for next running process
+//Borrorwed Code of Random 
+
+static uint Q[4096], c = 362436;
+
+void srand(uint x)
+{
+  int i;
+
+  Q[0] = x;
+  Q[1] = x + PHI;
+  Q[2] = x + PHI + PHI;
+
+  for (i = 3; i < 4096; i++)
+    Q[i] = Q[i - 3] ^ Q[i - 2] ^ PHI ^ i;
+}
+
+uint rand(void)
+{
+  if(sizeof(unsigned long long) != 8){
+    return 0;
+  }
+  unsigned long long t, a = 18782LL;
+  static uint i = 4095;
+  uint x, r = 0xfffffffe;
+  i = (i + 1) & 4095;
+  t = a * Q[i] + c;
+  c = (t >> 32);
+  x = t + c;
+  if (x < c) {
+    x++;
+    c++;
+  }
+  return (Q[i] = r - x);
+}
+/* End of code added*/
 
 struct {
   struct spinlock lock;
@@ -15,6 +55,7 @@ struct {
 static struct proc *initproc;
 
 int nextpid = 1;
+int totaltickets = 0;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -88,6 +129,10 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->tickets = DEFAULTTICKET;
+  p->ticks = 0;
+  p->use = 0;
+  
 
   release(&ptable.lock);
 
@@ -211,6 +256,7 @@ fork(void)
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
   pid = np->pid;
+  np->tickets = curproc->tickets;
 
   acquire(&ptable.lock);
 
@@ -323,17 +369,22 @@ void
 scheduler(void)
 {
   struct proc *p;
+  int tt = 0,winner;
   struct cpu *c = mycpu();
   c->proc = 0;
   
   for(;;){
     // Enable interrupts on this processor.
     sti();
-
+    tt = 0;
+    winner = rand() % (totaltickets+1);
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
+        continue;
+      tt+=p->tickets;
+      if(tt < winner) 
         continue;
 
       // Switch to chosen process.  It is the process's job
@@ -342,13 +393,16 @@ scheduler(void)
       c->proc = p;
       switchuvm(p);
       p->state = RUNNING;
-
+      p->use = 1;
+      p->ticks += 1;
       swtch(&(c->scheduler), p->context);
       switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
+      winner = rand() % (totaltickets+1);
+      //tt = 0;
     }
     release(&ptable.lock);
 
@@ -438,6 +492,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  totaltickets -= p->tickets;
 
   sched();
 
@@ -460,8 +515,10 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+      totaltickets += p->tickets;
+     }
 }
 
 // Wake up all processes sleeping on chan.
@@ -531,4 +588,18 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+int settickets(int pid,int ticket){
+	struct proc *p;
+	acquire(&ptable.lock);
+	for(p=ptable.proc; p < &ptable.proc[NPROC];p++){
+		if(p->pid == pid){
+			totaltickets -= p->tickets;
+			p->tickets = ticket;
+			totaltickets += p->tickets;
+			break;
+		}
+	}
+	release(&ptable.lock);
+	return 22;
 }
