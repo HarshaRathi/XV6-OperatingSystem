@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
+#include "pstat.h"
 
 int
 sys_fork(void)
@@ -88,4 +89,17 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+//set tickets for process
+int 
+sys_settickets(void)
+{
+ int pid;
+ int ticket;
+ if(argint(0,&pid) < 0)
+ 	return -1;
+ if(argint(1,&ticket) < 0)
+ 	return -1;
+ return settickets(pid,ticket);
 }
