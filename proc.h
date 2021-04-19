@@ -51,7 +51,9 @@ struct proc {
   char name[16];               // Process name (debugging)
   int priority;	 // Priority of process
   int timer;		 // Time to execute process
-  int totaltime;	 // Total time required to execute process
+  int totalcputime;	 // Total time required to execute process
+  int no_schedule;	//Number of time proces schedule
+  int iticks;
 };
 
 // Process memory is laid out contiguously, low addresses first:
