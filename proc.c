@@ -12,47 +12,53 @@ struct {
   struct proc proc[NPROC];
 } ptable;
 
+struct pstat {
+  int pid[NPROC];
+  int priority[NPROC];
+  int timer[NPROC];
+  int totalcputime[NPROC];
+  int no_time_schedule[NPROC];
+  int bt_ticks[NPROC];
+};
+
 static struct proc *initproc;
+static struct pstat pstat;
 
 int nextpid = 1;
+int statcount = 0;
 extern void forkret(void);
 extern void trapret(void);
 
 static void wakeup1(void *chan);
 
 //calculate cpu time
-int calculate_cpu_time(struct proc *p){
-	if(p->priority >= 0 && p->priority < 5){
-		return 200;
-	}
-	else if(p->priority >= 5 && p->priority < 10){
-		return 160;
-	}
-	else if(p->priority >= 10 && p->priority < 15){
-		return 120;
-	}
-	else if(p->priority >= 15 && p->priority < 20){
-		return 100;
-	}
-	else if(p->priority >= 20 && p->priority < 25){
-		return 60;
-	}
-	else if(p->priority >= 25 && p->priority < 30){
-		return 30;
-	}
-	return 0;
-}
-
-//set timer
-int settimer1(int pid, int timer){
-	struct proc *p;
-	for(p=ptable.proc ; p < &ptable.proc[NPROC] ; p++){
-		if(p->pid == pid){
-			p->timer = timer;
-			return 1;
-		}
-	}
-	return 0;
+int calculate_cpu_time(struct proc *p)
+{
+  if (p->priority >= 0 && p->priority < 5)
+  {
+    return 2000000000;
+  }
+  else if (p->priority >= 5 && p->priority < 10)
+  {
+    return 1400000000;
+  }
+  else if (p->priority >= 10 && p->priority < 15)
+  {
+    return 1000000000;
+  }
+  else if (p->priority >= 15 && p->priority < 20)
+  {
+    return 800000000;
+  }
+  else if (p->priority >= 20 && p->priority < 25)
+  {
+    return 600000000;
+  }
+  else if (p->priority >= 25 && p->priority < 30)
+  {
+    return 3000000;
+  }
+  return 0;
 }
 
 void
@@ -124,6 +130,9 @@ found:
   p->state = EMBRYO;
   p->pid = nextpid++;
   p->priority = DEFAULTPRIORITY;
+  p->timer = 0;
+  p->totalcputime = 0;
+  p->no_schedule = 0;
 
   release(&ptable.lock);
 
@@ -251,8 +260,18 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
+  np->iticks = ticks;
 
   release(&ptable.lock);
+  
+  //update statistics
+  pstat.pid[statcount] = np->pid;
+  pstat.priority[statcount] = np->priority;
+  pstat.no_time_schedule[statcount] = np->no_schedule;
+  pstat.totalcputime[statcount] =0;
+  pstat.timer[statcount] = np->timer;
+  pstat.bt_ticks[statcount] = np->iticks;
+  statcount += 1;
 
   return pid;
 }
@@ -330,6 +349,10 @@ wait(void)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
+        p->timer = 0;
+        p->no_schedule = 0;
+        p->totalcputime = 0;
+        
         p->state = UNUSED;
         release(&ptable.lock);
         return pid;
@@ -386,10 +409,26 @@ scheduler(void)
       
       //assign high priority process
       p = highpriority;
+      p->no_schedule+=1;
       //assign cpu time
       t = calculate_cpu_time(p);
-      settimer1(p->pid,t);
-
+      settimer(t);
+      p->timer = t;
+      p->totalcputime+=p->timer;
+      
+      //update statistics
+      int i;
+      for (i = 0; i < statcount; i++)
+      {
+        if (pstat.pid[i] == p->pid)
+        {
+          pstat.timer[i] = p->timer;
+          pstat.totalcputime[i] = p->totalcputime;
+          pstat.no_time_schedule[i] = p->no_schedule;
+          pstat.priority[i] = p->priority;
+          break;
+        }
+      }
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
@@ -587,25 +626,36 @@ procdump(void)
   }
 }
 
-int setpriority(int pid,int priority){
-	struct proc *p;
-	for(p=ptable.proc;p < &ptable.proc[NPROC];p++){
-		if(p->pid == pid){
-			p->priority = priority;
-			break;
-		}
-			
-	}
-	return 22;
-}
-int settimer(int pid,int timer){
-	struct proc *p;
-	for(p=ptable.proc;p < &ptable.proc[NPROC];p++){
-		if(p->pid == pid){
-			p->timer = timer;
-			break;
-		}
-	}
-	return 23;
-}
+int setpriority(int pid, int priority)
+{
+  struct proc *p;
+  int i;
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if (p->pid == pid)
+    {
 
+      p->priority = priority;
+     
+      for (i = 0; i < statcount; i++)
+      {
+        if (pstat.pid[i] == p->pid)
+        {
+          pstat.priority[i] = p->priority;
+          break;
+        }
+      }
+      break;
+    }
+  }
+  return 22;
+}
+//get statistics
+int getstat(void)
+{
+	int i;
+	cprintf("PID\tPRIORITY\tBEGIN_TICKS\tNO_OF_IME_SCHEDULE\tTIMER\tTOTALTIME\n");
+  	for(i=0;i<statcount;i++){		cprintf("%d\t%d\t\t%d\t\t\t%d\t\t%d\t%d\n",pstat.pid[i],pstat.priority[i],pstat.bt_ticks[i],pstat.no_time_schedule[i],pstat.timer[i],pstat.totalcputime[i]);
+  	}
+  	return 23;
+}
