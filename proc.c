@@ -322,7 +322,7 @@ wait(void)
 void
 scheduler(void)
 {
-  struct proc *p;
+  struct proc *p,*p1;
   struct cpu *c = mycpu();
   c->proc = 0;
   
@@ -335,6 +335,13 @@ scheduler(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+      
+      //fcfs scheduler
+      for(p1=ptable.proc; p1 < &ptable.proc[NPROC];p1++){
+       if(p1->pid < p->pid){
+        p = p1;
+       }
+      }
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
