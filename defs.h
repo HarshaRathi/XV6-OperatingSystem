@@ -121,7 +121,7 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
-int 	 getstat(struct pstat *st);
+int 	 getstat(void);
 int 	 settickets(int pid,int ticket);
 
 // swtch.S
