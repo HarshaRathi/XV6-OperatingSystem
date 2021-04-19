@@ -102,14 +102,7 @@ int sys_setpriority(void)
   return setpriority(pid,priority);
 }
 
-//settimer
-int sys_settimer(void)
-{
-  int pid;
-  int timer;
-  if(argint(0,&pid) < 0)
-  	return -1;
-  if(argint(0,&timer) < 0)
-  	return -1;
-  return settimer(pid,timer);
+//get stat
+int sys_getstat(void){
+	return getstat();
 }
