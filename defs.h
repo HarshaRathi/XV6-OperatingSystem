@@ -62,6 +62,7 @@ void            iderw(struct buf*);
 void            ioapicenable(int irq, int cpu);
 extern uchar    ioapicid;
 void            ioapicinit(void);
+void            settimer(int);
 
 // kalloc.c
 char*           kalloc(void);
@@ -121,7 +122,7 @@ int             wait(void);
 void            wakeup(void*);
 void            yield(void);
 int 	 setpriority(int,int);
-int 	 settimer(int,int);
+int 	 getstat(void);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
