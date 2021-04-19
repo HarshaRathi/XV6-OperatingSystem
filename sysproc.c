@@ -6,7 +6,6 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
-#include "pstat.h"
 
 int
 sys_fork(void)
@@ -102,4 +101,11 @@ sys_settickets(void)
  if(argint(1,&ticket) < 0)
  	return -1;
  return settickets(pid,ticket);
+}
+
+//get process stat
+int 
+sys_getstat(void)
+{
+	return getstat();
 }
