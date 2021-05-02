@@ -34,14 +34,7 @@ int main(int argc,char *argv[]){
                     close(fd);
                 }   
                 else{
-                    int pid5 = fork();
-                    if(pid5==0){
-                        sleep(70);
-                        getstat();
-                    }
-                    else{
-                        wait();
-                    }
+                   
                     wait();
                 }
                 
