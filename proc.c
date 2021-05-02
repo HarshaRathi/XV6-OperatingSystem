@@ -6,15 +6,39 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "date.h"
 
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
 
+typedef struct queue {
+  struct proc *front;
+  struct proc *rear;
+}queue;
+
+struct pstat{
+  int pid[NPROC];
+  int priority[NPROC];
+  int cpu_burst[NPROC];
+  int turnaround_time[NPROC];
+  int no_of_time_schedule[NPROC];
+  int completed[NPROC];
+};
+
+static struct pstat pstat;
+
+static queue priority1;
+static queue priority2;
+static queue priority3;
+
 static struct proc *initproc;
 
 int nextpid = 1;
+int ttime = 0;
+int smallstart = 0;
+int greatend = 0;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -23,6 +47,12 @@ static void wakeup1(void *chan);
 void
 pinit(void)
 {
+  priority1.front = 0;
+  priority2.front = 0;
+  priority3.front = 0;
+  priority1.rear = 0;
+  priority2.rear = 0;
+  priority3.rear = 0;
   initlock(&ptable.lock, "ptable");
 }
 
@@ -88,8 +118,47 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->priority = 2;
+  p->no_of_time_schedule = 0;
+  p->cpu_burst = 0;
+  p->turnaround_time = 0;
+  p->start_time = ttime;
+  if(p->pid == 3){
+    struct rtcdate time;
+    cmostime(&time);
+    smallstart = (time.hour*60*60)+(time.minute*60)+time.second;
+  }
+  //ENQUEUE START at the end of prirority2 queue
+
+  if(priority2.front==0 && priority2.rear == 0){
+    p->prev=0;
+    p->next=0;
+    priority2.front = p;
+    priority2.rear = p;
+  }
+  else if(priority2.front == priority2.rear){
+    p->prev = priority2.rear;
+    p->next = 0;
+    priority2.front->next = p;
+    priority2.rear = p;
+  }
+  else{
+    p->next = 0;
+    p->prev = priority2.rear;
+    priority2.rear->next = p;
+    priority2.rear = p;
+   
+  }
 
   release(&ptable.lock);
+
+  //update statistics
+  pstat.pid[p->pid] = p->pid;
+  pstat.priority[p->pid] = 2;
+  pstat.completed[p->pid] = 0;
+  pstat.cpu_burst[p->pid] = 0;
+  pstat.turnaround_time[p->pid] = 0;
+  pstat.no_of_time_schedule[p->pid] = 0;
 
   // Allocate kernel stack.
   if((p->kstack = kalloc()) == 0){
@@ -263,6 +332,14 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+  struct rtcdate time;
+  cmostime(&time);
+  int tmp = (time.hour*60*60)+(time.minute*60)+time.second;
+  if(greatend < tmp){
+    greatend = tmp;
+  }
+  pstat.completed[curproc->pid] = 1;
+  pstat.turnaround_time[curproc->pid] = ttime - curproc->start_time;
   sched();
   panic("zombie exit");
 }
@@ -290,6 +367,22 @@ wait(void)
         kfree(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
+        if(p->next){
+          p->prev->next = p->next;
+          p->next->prev = p->prev;
+        }
+        else{
+          if(priority1.rear == p){
+            priority1.rear = p->prev;
+          }
+          else if(priority2.rear == p){
+            priority2.rear = p->prev;
+          }
+          else if(priority3.rear == p){
+            priority3.rear = p->prev;
+          }
+          p->prev->next = 0;
+        }
         p->pid = 0;
         p->parent = 0;
         p->name[0] = 0;
@@ -322,10 +415,12 @@ wait(void)
 void
 scheduler(void)
 {
-  struct proc *p;
+  struct proc *p,*p1,*p2,*p3;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+  p1 = priority1.front;
+  p2=priority2.front;
+  p3=priority3.front;
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -335,6 +430,70 @@ scheduler(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+      while(p1){
+       if(p1->state == RUNNABLE ){
+        p =p1;
+        p->cpu_burst = p->cpu_burst + 100;
+        p->turnaround_time = ttime - p->start_time;
+        p->no_of_time_schedule = p->no_of_time_schedule + 1;
+        pstat.turnaround_time[p->pid] = p->turnaround_time;
+        pstat.cpu_burst[p->pid] = p->cpu_burst;
+        pstat.no_of_time_schedule[p->pid] = p->no_of_time_schedule;
+        ttime+=1000;
+        settimer(1000000);
+        p1 = p->next;
+        goto schedule;
+       
+      }
+      p1 = p1->next;
+    }
+    while(p2){
+      
+       if(p2->state == RUNNABLE ){
+          p =p2;
+          p->cpu_burst = p->cpu_burst + 10;
+          p->turnaround_time = ttime - p->start_time;
+          p->no_of_time_schedule = p->no_of_time_schedule + 1;
+          pstat.turnaround_time[p->pid] = p->turnaround_time;
+          pstat.cpu_burst[p->pid] = p->cpu_burst;
+          pstat.no_of_time_schedule[p->pid] = p->no_of_time_schedule;
+          ttime+=100;
+          settimer(100000);
+          p2 = p2->next;
+          goto schedule;
+        }
+        p2 = p2->next;
+     }
+   
+      while(p3){
+        if(p3->state == RUNNABLE ){
+          p =p3;
+         
+          p->cpu_burst = p->cpu_burst + 1;
+          p->turnaround_time = ttime - p->start_time;
+          p->no_of_time_schedule = p->no_of_time_schedule + 1;
+          pstat.turnaround_time[p->pid] = p->turnaround_time;
+          pstat.cpu_burst[p->pid] = p->cpu_burst;
+          pstat.no_of_time_schedule[p->pid] = p->no_of_time_schedule;
+          ttime+=1;
+          settimer(10000);
+           p3 = p3->next;
+          goto schedule;
+        }
+        p3 = p3->next;
+      }
+
+    schedule:
+    if(p1 == 0){
+      p1 = priority1.front;
+    }
+    if(p2 == 0){
+      p2=priority2.front;
+    }
+    if(p3==0){
+      p3 = priority3.front;
+    }
+
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -531,4 +690,218 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int setpriority(int pid,int priority){
+ //struct proc *p;
+   struct proc r;
+  acquire(&ptable.lock);
+
+  int find = 0;
+  struct proc *q;
+  q = priority1.front;
+  while(q){
+    if(q->pid == pid){
+      if(priority == 1){
+        release(&ptable.lock);
+        return 22;
+      }
+      find=1;
+      
+      pstat.priority[pid] = priority;
+      q->priority = priority;
+      r = *q;
+      if(priority1.front == q){
+        if(q->next){
+          priority1.front = q->next;
+        }
+        else{
+        priority1.front = 0;
+        priority1.rear = 0;
+        }
+      }
+     else{
+        if(q->prev){
+          q->prev->next = r.next;
+         
+          
+        }
+        else{
+          q->prev = 0;
+        }
+        if(q->next){
+          q->next->prev = q->prev;
+
+        }
+        else{
+          q->next=0;
+        }
+
+      }
+
+      goto change;
+    }
+    q = q->next;
+  }
+  q = priority2.front;
+  while(q){
+    if(q->pid == pid){
+      find=1;
+       q->priority = priority;
+       pstat.priority[pid] = priority;
+    
+      if(priority == 2){
+        release(&ptable.lock);
+        return 22;
+      }
+       r = *q;
+      if(priority2.front == q){
+        if(q->next){
+          priority2.front = q->next;
+        }
+        else{
+        priority2.front = 0;
+        priority2.rear = 0;
+        }
+      }
+      else{
+        if(priority2.front == q){
+          priority2.front = q;
+        }
+        if(q->prev){
+          q->prev->next = r.next;
+         
+          
+        }
+        else{
+          q->prev = 0;
+        }
+        if(q->next){
+          q->next->prev = q->prev;
+
+        }
+        else{
+          q->next=0;
+        }
+
+      }
+      goto change;
+    }
+    q = q->next;
+  }
+  q = priority3.front;
+  while(q){
+    if(q->pid == pid){
+      find = 1;
+      q->priority = priority;
+      pstat.priority[pid] = priority;
+      if(priority==3){
+        release(&ptable.lock);
+        return 22;
+      }
+       r = *q;
+      if(priority3.front == q){
+       if(q->next){
+          priority3.front = q->next;
+        }
+        else{
+        priority3.front = 0;
+        priority3.rear = 0;
+        }
+      }
+     else{
+        if(priority3.front == q){
+          priority3.front = q;
+        }
+        if(q->prev){
+          q->prev->next = r.next;
+         
+          
+        }
+        else{
+          q->prev = 0;
+        }
+        if(q->next){
+          q->next->prev = q->prev;
+
+        }
+        else{
+          q->next=0;
+        }
+
+      }
+      goto change;
+    }
+    q = q->next;
+  }
+  change:
+  
+  if(find == 1)  {
+
+    if(priority == 1){
+      if(priority1.front){
+        priority1.rear->next = q;
+        q->prev = priority1.rear;
+        priority1.rear = q;
+        priority1.rear->next = 0;
+      }
+      else{
+         priority1.front=q;
+         priority1.rear=q;
+         priority1.rear->next = 0;
+
+      }
+    } 
+    else if(priority == 2){
+      if(priority2.front){
+        priority2.rear->next = q;
+        q->prev = priority2.rear;
+        priority2.rear = q;
+        priority2.rear->next = 0;
+      }
+      else{
+         priority2.front=q;
+         priority2.rear=q;
+         priority2.rear->next = 0;
+      }
+
+    }
+    else if(priority == 3){
+      if(priority3.front){
+        priority3.rear->next = q;
+        q->prev = priority3.rear;
+        priority3.rear = q;
+        priority3.rear->next = 0;
+      }
+      else{
+        priority3.front=q;
+        priority3.rear=q;
+        priority3.rear->next = 0;
+      }
+
+    }
+
+  }
+
+  release(&ptable.lock);
+  return 22;
+
+}
+
+int getstat(void){
+  int i;
+  int nprocess=0;
+  int totalburst=0;
+  //struct proc *p;
+  cprintf("PID\tPRIORITY\tSCHEDULE\tCPU BURST\tTURNAROUND TIME\tCompleted\n");
+  for(i=1;i<nextpid;i++){
+    if(pstat.completed[i]==1)
+    {
+      nprocess+=1;
+      totalburst+=pstat.cpu_burst[i];
+     cprintf("%d\t%d\t\t%d\t\t%d\t\t%d\t\t%d\n",pstat.pid[i],pstat.priority[i],pstat.no_of_time_schedule[i],pstat.cpu_burst[i],pstat.turnaround_time[i],pstat.completed[i]);
+  }
+  }
+  cprintf("\nThroughput =  %d / %d \n",nprocess,(greatend-smallstart));
+  return 23;
 }
