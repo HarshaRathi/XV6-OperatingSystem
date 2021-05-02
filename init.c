@@ -11,7 +11,7 @@ int
 main(void)
 {
   int pid, wpid;
-
+  int i = 0;
   if(open("console", O_RDWR) < 0){
     mknod("console", 1, 1);
     open("console", O_RDWR);
@@ -20,6 +20,13 @@ main(void)
   dup(0);  // stderr
 
   for(;;){
+    if(i==0)
+    {
+      i=i+1;
+    }
+    else{
+      continue;
+    }
     printf(1, "init: starting sh\n");
     pid = fork();
     if(pid < 0){
