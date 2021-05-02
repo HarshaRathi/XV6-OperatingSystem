@@ -30,21 +30,13 @@ int main(int argc,char *argv[]){
                 int pid4 = fork();
                 if(pid4==0){
                     int fd = open("har.txt",O_CREATE|O_WRONLY);
-                    for(i=0;i<10000;i++){
+                    for(i=0;i<1000;i++){
                         write(fd,"harsha",6);
                     }
                     close(fd);
                 }
                 else{
-                    int pid5 = fork();
-                    if(pid5==0){
-                        sleep(300);
-                        getstat();
-                    }
-                    else{
-                        wait();
-                    }
-                    wait();
+                   wait();
                 }
                 wait();
             }
