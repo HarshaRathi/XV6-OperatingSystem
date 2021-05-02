@@ -727,6 +727,6 @@ int getstat(void)
 
   }
    
-   cprintf("\nThroughput = %d\n",nprocess/(great-small));
+   cprintf("\nThroughput = %d / %d\n",nprocess,(great-small));
   return 23;
 }
