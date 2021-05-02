@@ -65,8 +65,8 @@ lapicinit(void)
   // If xv6 cared more about precise timekeeping,
   // TICR would be calibrated using an external time source.
   lapicw(TDCR, X1);
-  lapicw(TIMER, MASKED | (T_IRQ0 + IRQ_TIMER));
-  lapicw(TICR, 0);
+  lapicw(TIMER, MASKED);
+  lapicw(TICR,0);
 
   // Disable logical interrupt lines.
   lapicw(LINT0, MASKED);
