@@ -6,15 +6,26 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "date.h"
 
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
 
+struct pstat{
+  int pid[NPROC];
+  int cpu_burst[NPROC];
+  int turnaround[NPROC];
+  int completed[NPROC];
+};
+
 static struct proc *initproc;
+static struct pstat pstat;
 
 int nextpid = 1;
+int small=0;
+int large=0;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -88,6 +99,13 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->use = 0;
+
+  //update stat
+  pstat.pid[p->pid] = p->pid;
+  pstat.cpu_burst[p->pid] = 0;
+  pstat.turnaround[p->pid] = 0;
+  
 
   release(&ptable.lock);
 
@@ -199,6 +217,11 @@ fork(void)
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
+  cmostime((np->starttime));
+  np->tt1 = (np->starttime->hour*60*60) + (np->starttime->minute*60) + (np->starttime->second);
+  if(np->pid==3){
+    small = np->tt1;
+  }
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
@@ -246,7 +269,12 @@ exit(void)
   iput(curproc->cwd);
   end_op();
   curproc->cwd = 0;
-
+  cmostime((curproc->endtime));
+  curproc->tt2 = (curproc->endtime->hour*60*60) + (curproc->endtime->minute * 60) + curproc->starttime->second;
+  pstat.turnaround[curproc->pid] = curproc->tt2 - curproc->tt1;
+  pstat.cpu_burst[curproc->pid] = curproc->tt2 - curproc->tt3;  
+  pstat.completed[curproc->pid] = 1;
+  large = curproc->tt2;
   acquire(&ptable.lock);
 
   // Parent might be sleeping in wait().
@@ -322,7 +350,7 @@ wait(void)
 void
 scheduler(void)
 {
-  struct proc *p,*p1;
+  struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
   
@@ -335,14 +363,18 @@ scheduler(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
-      
-      //fcfs scheduler
-      for(p1=ptable.proc; p1 < &ptable.proc[NPROC];p1++){
-       if(p1->pid < p->pid){
-        p = p1;
-       }
+      //FCFS Scheduler
+      struct proc *p1;
+      for(p1 = ptable.proc; p1 < &ptable.proc[NPROC] ; p1++){
+        if(p1->state == RUNNABLE && p1->pid < p->pid)
+        	p = p1;
       }
-
+      if(p->use == 0){
+      struct rtcdate tt;
+      cmostime(&tt);
+      p->tt3 = (tt.hour*60*60)+(tt.minute *60)+(tt.second);
+      p->use = 1;
+      }
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
@@ -356,6 +388,7 @@ scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
+      p=ptable.proc;
     }
     release(&ptable.lock);
 
@@ -538,4 +571,17 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int getstat(){
+  int i = 0;
+  int nprocess=0;
+  cprintf("\nPID\tCPU\tTURNAROUND\n");
+  for(i=0;i<nextpid;i++){
+    if(pstat.turnaround[i]!=0 && pstat.completed[i]==1){
+      nprocess+=1;
+    cprintf("\n%d\t%d\t%d\n",pstat.pid[i],pstat.cpu_burst[i],pstat.turnaround[i]);}
+  }
+  cprintf("\nThroughput = %d / %d\n",nprocess,(large-small));
+  return 22;
 }
