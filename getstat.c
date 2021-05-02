@@ -4,5 +4,5 @@
 #include "fcntl.h"
 int main(int argc,char *argv[]){
     getstat();
-    return 0;
+    exit();
 }
