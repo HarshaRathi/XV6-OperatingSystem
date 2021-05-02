@@ -6,6 +6,7 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "date.h"
 #define PHI 0x9e3779b9
 
 //Borrowed Random Function Code from https://github.com/lehaoda/Operating-System-Class-Project---Add-Lottery-Scheduler-to-xv6.git
@@ -60,13 +61,19 @@ struct pstat
   int pid[NPROC];
   int tickets[NPROC];
   int no_time_use[NPROC];
+  int cpu_burst[NPROC];
+  int turnaroundtime[NPROC];
+  int complete[NPROC];
+  int cmostartime[NPROC];
+  int cmosendtime[NPROC];
 };
+
 static struct proc *initproc;
 static struct pstat pstat;
 
 int nextpid = 1;
-int statcount = 0;
 int w;
+int allocatetickets = 0;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -76,6 +83,7 @@ int gettotalticket()
 {
   struct proc *p;
   int tt = 0;
+  // acquire(&ptable.lock);
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
   {
     if (p->state != RUNNABLE)
@@ -84,6 +92,7 @@ int gettotalticket()
     }
     tt += p->tickets;
   }
+  // release(&ptable.lock);
   return tt;
 }
 
@@ -158,6 +167,22 @@ found:
   p->tickets = DEFAULTTICKET;
   p->use = 0;
   p->ticks = 0;
+  p->start_time = allocatetickets;
+  p->turnaround_Time = 0;
+  
+  struct rtcdate time;
+  cmostime(&time);
+  p->cmostarttime =(time.hour*60*60)+(time.minute*60)+(time.second);
+
+
+  //update statistics
+  pstat.pid[p->pid] = p->pid;
+  pstat.complete[p->pid] = 0;
+  pstat.cpu_burst[p->pid] = 0;
+  pstat.turnaroundtime[p->pid] = 0;
+  pstat.no_time_use[p->pid] = 0;
+  pstat.tickets[p->pid] = p->tickets;
+  pstat.cmostartime[p->pid] = p->cmostarttime;
 
   release(&ptable.lock);
 
@@ -269,6 +294,7 @@ fork(void)
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
+  
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
@@ -287,11 +313,6 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&ptable.lock);
-  
-  pstat.pid[statcount] = np->pid;
-  pstat.tickets[statcount] = np->tickets;
-  pstat.no_time_use[statcount] = np->ticks;
-  statcount += 1;
 
   return pid;
 }
@@ -338,6 +359,13 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+  struct rtcdate endtime;
+  cmostime(&endtime);
+  curproc->cmosendtime = (endtime.hour*60*60) + (endtime.minute*60) + endtime.second;
+  pstat.cmosendtime[curproc->pid] = curproc->cmosendtime;
+  //getcprintf("\n%d\n",pstat.cmosendtime[curproc->pid]);
+  pstat.complete[curproc->pid] = 1;
+  pstat.turnaroundtime[curproc->pid] = curproc->turnaround_Time;
   sched();
   panic("zombie exit");
 }
@@ -398,8 +426,8 @@ void
 scheduler(void)
 {
   struct proc *p;
-  struct cpu *c = mycpu();
   int tt = 0, winner = 0, tt1 = 0;
+  struct cpu *c = mycpu();
   c->proc = 0;
   
   for(;;){
@@ -407,11 +435,9 @@ scheduler(void)
     sti();
     tt = gettotalticket();
     winner = rand() % (tt + 1);
-
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    {
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       w = winner;
       if(p->state != RUNNABLE)
         continue;
@@ -427,16 +453,12 @@ scheduler(void)
       p->state = RUNNING;
       p->use = 1;
       p->ticks+=1;
+      allocatetickets+=1;
+      p->turnaround_Time = allocatetickets - p->start_time;
       //update stat
-      int i = 0;
-      for (i = 0; i < statcount; i++)
-      {
-        if (pstat.pid[i] == p->pid)
-        {
-          pstat.tickets[i] = p->tickets;
-          pstat.no_time_use[i] = p->ticks;
-        }
-      }
+      pstat.cpu_burst[p->pid] = p->ticks;
+      pstat.turnaroundtime[p->pid] = p->turnaround_Time;
+      pstat.no_time_use[p->pid] = p->ticks;
 
       swtch(&(c->scheduler), p->context);
       switchkvm();
@@ -447,6 +469,7 @@ scheduler(void)
       tt = gettotalticket();
       winner = rand() % (gettotalticket() + 1);
       tt1 = 0;
+      p=ptable.proc;
     }
     release(&ptable.lock);
 
@@ -639,20 +662,13 @@ int settickets(int pid, int ticket)
   {
     if (p->pid == pid)
     {
+      pstat.tickets[p->pid] = ticket;
       p->tickets = ticket;
       break;
     }
   }
   release(&ptable.lock);
-  int i = 0;
-  for (i = 0; i < statcount; i++)
-  {
-    if (pstat.pid[i] == p->pid)
-    {
-      pstat.tickets[i] = p->tickets;
-      pstat.no_time_use[i] = p->ticks;
-    }
-  }
+ 
 
   return 22;
 }
@@ -660,10 +676,18 @@ int settickets(int pid, int ticket)
 int getstat()
 {
   int i;
-  cprintf("PID\tTICKETS\tNO_OF_TIME_SCHEDULE\n");
-  for (i = 0; i < statcount; i++)
+  int nprocess=0;
+  int totalburst=0;
+
+  cprintf("PID\tTICKETS\tNO_OF_TIME_SCHEDULE\tCPU BURST\tTURNTIME\tCOMPLETE\tWAIT\n");
+  for (i = 0; i < nextpid-1; i++)
   {
-    cprintf("%d\t%d\t%d\n", pstat.pid[i], pstat.tickets[i], pstat.no_time_use[i]);
+    if(pstat.complete[i]==1){
+      nprocess+=1;
+      totalburst+=pstat.cpu_burst[i];
+    cprintf("%d\t%d\t%d\t\t\t%d\t\t%d\t\t%d\t\t%d\n", pstat.pid[i], pstat.tickets[i], pstat.no_time_use[i],(pstat.cpu_burst[i])*10,(pstat.turnaroundtime[i])*10,pstat.complete[i],(pstat.turnaroundtime[i]-pstat.cpu_burst[i])*10);
+    }
   }
+  cprintf("\nThroughput = %d / %d\n",nprocess,(pstat.cmosendtime[6]-pstat.cmostartime[2]));
   return 23;
 }
