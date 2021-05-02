@@ -104,7 +104,7 @@ sys_settickets(void)
 }
 
 //get process stat
-int 
+int
 sys_getstat(void)
 {
 	return getstat();
