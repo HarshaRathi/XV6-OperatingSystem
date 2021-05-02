@@ -52,6 +52,10 @@ struct proc {
   int tickets;		 // tickets for process
   int use;		 // process schedule or not
   int ticks;		 // how many times process schedule
+  int turnaround_Time;
+  int start_time;
+  int cmostarttime;
+  int cmosendtime;
 };
 
 // Process memory is laid out contiguously, low addresses first:
