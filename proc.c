@@ -6,19 +6,26 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "date.h"
 
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
 
-struct pstat {
+struct pstat
+{
   int pid[NPROC];
   int priority[NPROC];
   int timer[NPROC];
-  int totalcputime[NPROC];
+  int no_time_schedule_changepriority[NPROC];
   int no_time_schedule[NPROC];
-  int bt_ticks[NPROC];
+  int turnaround_time[NPROC];
+  int cpu_burst_time[NPROC];
+  int completed[NPROC];
+  char *name[NPROC];
+  int cmostarttime[NPROC];
+  int cmosendtime[NPROC];
 };
 
 static struct proc *initproc;
@@ -26,9 +33,10 @@ static struct pstat pstat;
 
 int nextpid = 1;
 int statcount = 0;
+int ttime = 0;
 extern void forkret(void);
 extern void trapret(void);
-
+extern volatile uint *lapic;
 static void wakeup1(void *chan);
 
 //calculate cpu time
@@ -36,28 +44,18 @@ int calculate_cpu_time(struct proc *p)
 {
   if (p->priority >= 0 && p->priority < 5)
   {
-    return 2000000000;
+    return 9000000;
   }
   else if (p->priority >= 5 && p->priority < 10)
   {
-    return 1400000000;
+    return 1000000;
   }
   else if (p->priority >= 10 && p->priority < 15)
   {
-    return 1000000000;
+    return 1000;
   }
-  else if (p->priority >= 15 && p->priority < 20)
-  {
-    return 800000000;
-  }
-  else if (p->priority >= 20 && p->priority < 25)
-  {
-    return 600000000;
-  }
-  else if (p->priority >= 25 && p->priority < 30)
-  {
-    return 3000000;
-  }
+  
+
   return 0;
 }
 
@@ -131,8 +129,30 @@ found:
   p->pid = nextpid++;
   p->priority = DEFAULTPRIORITY;
   p->timer = 0;
-  p->totalcputime = 0;
+  p->wait = 0;
+  p->completed = 0;
+  p->cpu_burst = 0;
+  p->start_time = ttime;
+  p->turnaround_time = ttime-p->start_time;
   p->no_schedule = 0;
+  p->no_schedule_changepriority = 0;
+
+  struct rtcdate startime;
+  cmostime(&startime);
+  p->cmosstarttime = (startime.hour*60*60)+(startime.minute*60)+(startime.second);
+  //cprintf("\n%d\n",p->cmosstarttime);
+
+  //update statistics
+  pstat.pid[statcount] = p->pid;
+  pstat.priority[statcount] = p->priority;
+  pstat.no_time_schedule[statcount] = p->no_schedule;
+  pstat.no_time_schedule_changepriority[statcount] = p->no_schedule_changepriority;
+  pstat.timer[statcount] = p->timer;
+  pstat.completed[statcount] = p->completed;
+  pstat.turnaround_time[statcount] = p->turnaround_time;
+  pstat.cpu_burst_time[statcount] = p->cpu_burst;
+  pstat.cmostarttime[statcount] = p->cmosstarttime;
+  statcount += 1;
 
   release(&ptable.lock);
 
@@ -260,18 +280,8 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
-  np->iticks = ticks;
 
   release(&ptable.lock);
-  
-  //update statistics
-  pstat.pid[statcount] = np->pid;
-  pstat.priority[statcount] = np->priority;
-  pstat.no_time_schedule[statcount] = np->no_schedule;
-  pstat.totalcputime[statcount] =0;
-  pstat.timer[statcount] = np->timer;
-  pstat.bt_ticks[statcount] = np->iticks;
-  statcount += 1;
 
   return pid;
 }
@@ -315,9 +325,25 @@ exit(void)
         wakeup1(initproc);
     }
   }
-
+  
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+  curproc->completed = 1;
+  curproc->turnaround_time = ttime - curproc->start_time;
+  struct rtcdate endtime;
+  cmostime(&endtime);
+  curproc->cmosendtime = (endtime.hour*60*60)+(endtime.minute*60)+(endtime.second);
+  //update statistics
+  for(int i=0;i<NPROC;i++){
+    if(pstat.pid[i] == curproc->pid){
+      pstat.completed[i] = 1;
+      pstat.turnaround_time[i] = curproc->turnaround_time;
+      pstat.priority[i] = curproc->priority;
+      pstat.cmosendtime[i] = curproc->cmosendtime;
+ 
+      break;
+    }
+  }
   sched();
   panic("zombie exit");
 }
@@ -349,10 +375,6 @@ wait(void)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
-        p->timer = 0;
-        p->no_schedule = 0;
-        p->totalcputime = 0;
-        
         p->state = UNUSED;
         release(&ptable.lock);
         return pid;
@@ -382,40 +404,64 @@ void
 scheduler(void)
 {
   struct proc *p;
-  struct proc *p1;
   struct cpu *c = mycpu();
-  struct proc *highpriority;
-  int t;
   c->proc = 0;
-  
+  struct proc *p1;
   for(;;){
     // Enable interrupts on this processor.
     sti();
-
+    struct proc *highpriority;
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
-      
       //select high priority process
       highpriority = p;
-      for(p1 = ptable.proc; p1 < &ptable.proc[NPROC]; p1++){
-      	if(p1->state != RUNNABLE)
-      	   continue;
-      	if(p1->priority < highpriority->priority)
-      	   highpriority = p1;
+      for (p1 = ptable.proc; p1 < &ptable.proc[NPROC]; p1++)
+      {
+        if (p1->state != RUNNABLE)
+          continue;
+
+        if (p1->priority < highpriority->priority)
+          highpriority = p1;
       }
-      
-      //assign high priority process
+
       p = highpriority;
-      p->no_schedule+=1;
+      if(p1->wait > 0){
+        p->wait -= 1;
+      }
+
+      //Aging
+      for(p1=ptable.proc;p1<&ptable.proc[NPROC];p1++){
+        if(p1->state != RUNNABLE)
+          continue;
+        if(p1->priority == highpriority->priority){
+          continue;
+        }
+        if(p1->wait > 100){
+          p1->wait = 0;
+          if(p1->priority>1){
+            p1->priority-=1;
+          }
+        }
+        else{
+          p1->wait += 1;
+        }
+      }
+
       //assign cpu time
+      int t;
       t = calculate_cpu_time(p);
-      settimer(t);
+      settimer(t * 1000);
+
       p->timer = t;
-      p->totalcputime+=p->timer;
-      
+      p->no_schedule += 1;
+      p->no_schedule_changepriority += 1;
+      p->cpu_burst = p->cpu_burst + t;
+      ttime = ttime + t;
+      p->turnaround_time = ttime-p->start_time;
+
       //update statistics
       int i;
       for (i = 0; i < statcount; i++)
@@ -423,9 +469,12 @@ scheduler(void)
         if (pstat.pid[i] == p->pid)
         {
           pstat.timer[i] = p->timer;
-          pstat.totalcputime[i] = p->totalcputime;
           pstat.no_time_schedule[i] = p->no_schedule;
+          pstat.no_time_schedule_changepriority[i] = p->no_schedule_changepriority;
           pstat.priority[i] = p->priority;
+          pstat.cpu_burst_time[i] = p->cpu_burst;
+      
+          pstat.turnaround_time[i] = p->turnaround_time;
           break;
         }
       }
@@ -630,32 +679,54 @@ int setpriority(int pid, int priority)
 {
   struct proc *p;
   int i;
+  acquire(&ptable.lock);
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
   {
     if (p->pid == pid)
     {
-
       p->priority = priority;
-     
+      p->no_schedule_changepriority = 0;
+      p->wait = 0;
       for (i = 0; i < statcount; i++)
       {
         if (pstat.pid[i] == p->pid)
         {
           pstat.priority[i] = p->priority;
-          break;
+          release(&ptable.lock);
+          return 22;
         }
       }
       break;
     }
   }
+  release(&ptable.lock);
   return 22;
 }
+
 //get statistics
 int getstat(void)
 {
-	int i;
-	cprintf("PID\tPRIORITY\tBEGIN_TICKS\tNO_OF_IME_SCHEDULE\tTIMER\tTOTALTIME\n");
-  	for(i=0;i<statcount;i++){		cprintf("%d\t%d\t\t%d\t\t\t%d\t\t%d\t%d\n",pstat.pid[i],pstat.priority[i],pstat.bt_ticks[i],pstat.no_time_schedule[i],pstat.timer[i],pstat.totalcputime[i]);
-  	}
-  	return 23;
+  int i;
+  int totalburst=0;
+  int nprocess=0;
+  int small=987654321;
+  int great=0;
+  small = pstat.cmostarttime[2];
+  great = pstat.cmosendtime[6];
+  cprintf("PID\tPRIORITY\tNO_SCHEDULE\tNO_TIME\t Complete\tCPU_BURST\tTURNAROUND_TIME\t\tWAITING\n");
+  for (i = 0; i < statcount; i++)
+  {
+    if(pstat.completed[i]==1){
+     
+    
+     
+      totalburst+=pstat.cpu_burst_time[i];
+      nprocess+=1;
+      cprintf("%d\t%d\t\t%d\t\t%d\t\t%d\t%d\t\t%d\t\t%d\n", pstat.pid[i], pstat.priority[i], pstat.no_time_schedule[i], pstat.no_time_schedule_changepriority[i],pstat.completed[i],pstat.cpu_burst_time[i],pstat.turnaround_time[i],pstat.turnaround_time[i]-pstat.cpu_burst_time[i]);
+    }
+
+  }
+   
+   cprintf("\nThroughput = %d\n",nprocess/(great-small));
+  return 23;
 }
