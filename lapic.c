@@ -227,3 +227,7 @@ cmostime(struct rtcdate *r)
   *r = t1;
   r->year += 2000;
 }
+
+void settimer(int count){
+  lapicw(TICR,count);
+}
