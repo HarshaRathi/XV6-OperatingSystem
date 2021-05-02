@@ -90,19 +90,17 @@ sys_uptime(void)
   return xticks;
 }
 
-//setpriority
-int sys_setpriority(void)
-{
+int 
+sys_setpriority(void){
   int pid;
   int priority;
-  if(argint(0,&pid) < 0)
-  	return -1;
-  if(argint(1,&priority) < 0)
-  	return -1;
+  if(argint(0,&pid)<0)
+    return -1;
+  if(argint(1,&priority)<0)
+    return -1;
   return setpriority(pid,priority);
 }
 
-//get stat
 int sys_getstat(void){
-	return getstat();
+  return getstat();
 }
